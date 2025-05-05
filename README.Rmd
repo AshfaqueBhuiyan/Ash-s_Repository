@@ -1,0 +1,205 @@
+---
+title: "Inside the Price Tag: Predicting Airbnb Rental Prices in NYC"
+author: "Ash Bhuiyan"
+date: "05/05/2025"
+output:
+  github_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  message   = FALSE,
+  warning   = FALSE,
+  fig.width = 7,
+  fig.height = 5
+)
+set.seed(123)
+```
+
+### 1. Introduction
+
+My Final Project aims to **predict Airbnb rental prices** in New York City using listing features, geography, host behavior, and guest reviews.
+The project is driven by the question: What factors most significantly influence how much a property is listed for on Airbnb?
+Using a comprehensive dataset of nearly 49,000 listings from 2019, I explore how variables such as neighborhood, room type, number of reviews, availability, and host activity affect pricing dynamics.
+
+The analysis begins with thorough data cleaning and feature engineering to ensure accurate and interpretable results. Visual exploration then uncovers important trends across boroughs and room types.
+
+Through a combination of visual exploration and machine learning models—including Linear Regression, Decision Tree, and Random Forest—the analysis reveals meaningful patterns and evaluates model performance to better understand the dynamics of short-term rental pricing in NYC.
+
+### 2. Data Loading & Preview
+
+```{r load-data}
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(randomForest)
+library(rpart)
+library(skimr)
+library(knitr)
+library(viridis)
+
+airbnb <- read_csv("AB_NYC_2019.csv")
+glimpse(airbnb)
+summary(airbnb$price)
+```
+
+### 3. Data Cleaning & Feature Engineering
+
+```{r clean-engineer}
+airbnb_clean <- airbnb %>%
+  mutate(
+    last_review = ymd(last_review),
+    reviews_per_month = replace_na(reviews_per_month, 0)
+  ) %>%
+  filter(!is.na(name), !is.na(host_name)) %>%
+  filter(price > 0, price < 1000, minimum_nights <= 365) %>%
+  mutate(log_price = log(price))
+
+skim(airbnb_clean %>% select(price, log_price, neighbourhood_group, room_type))
+```
+
+### 4. Exploratory Data Analysis
+
+#### 4.1 Price Distribution by Borough
+
+```{r boxplot-borough}
+ggplot(airbnb_clean, aes(x = neighbourhood_group, y = price, fill = neighbourhood_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  coord_cartesian(ylim = quantile(airbnb_clean$price, c(0.05, 0.95))) +
+  labs(
+    x = "Borough",
+    y = "Price (USD)",
+    title = "Price Distribution by Borough"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+#### 4.2 Price Distribution by Room Type
+
+```{r boxplot-room}
+ggplot(airbnb_clean, aes(x = room_type, y = price, fill = room_type)) +
+  geom_boxplot(alpha = 0.7) +
+  coord_flip() +
+  labs(
+    x = "Room Type",
+    y = "Price (USD)",
+    title = "Price Distribution by Room Type"
+  ) +
+  scale_fill_brewer(palette = "Pastel1") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+#### 4.3 Host Listings vs. Price
+
+```{r host-bar}
+airbnb_clean %>%
+  group_by(calculated_host_listings_count) %>%
+  summarize(avg_price = mean(price), n = n()) %>%
+  filter(calculated_host_listings_count <= 10) %>%
+  ggplot(aes(x = factor(calculated_host_listings_count), y = avg_price, fill = avg_price)) +
+  geom_col(color = "black", width = 0.7) +
+  labs(
+    x = "Number of Listings per Host",
+    y = "Average Price (USD)",
+    title = "Host Size vs. Average Price",
+    fill = "Avg Price"
+  ) +
+  scale_fill_gradient(low = "#deebf7", high = "#08519c") +
+  theme_minimal()
+```
+
+### 5. Modeling
+
+#### 5.1 Linear Regression
+
+```{r lm-model}
+lm_mod <- train(
+  log_price ~ neighbourhood_group + room_type +
+    availability_365 + reviews_per_month + calculated_host_listings_count,
+  data = airbnb_clean,
+  method = "lm",
+  trControl = trainControl(method = "cv", number = 3)
+)
+lm_mod$results
+```
+
+#### 5.2 Decision Tree
+
+```{r rpart-model}
+rpart_mod <- train(
+  log_price ~ neighbourhood_group + room_type +
+    availability_365 + reviews_per_month + calculated_host_listings_count,
+  data = airbnb_clean,
+  method = "rpart",
+  trControl = trainControl(method = "cv", number = 3)
+)
+rpart_mod$results
+```
+
+#### 5.3 Random Forest
+
+```{r rf-model}
+set.seed(123)
+airbnb_small <- airbnb_clean %>% sample_n(1000)
+
+rf_mod <- randomForest(
+  log_price ~ neighbourhood_group + room_type +
+    availability_365 + reviews_per_month + calculated_host_listings_count,
+  data = airbnb_small,
+  ntree = 50,
+  mtry = 2
+)
+
+rf_mod
+```
+
+### 6. Model Comparison Table
+
+```{r compare-table}
+model_summary <- data.frame(
+  Model = c("Linear Regression", "Decision Tree", "Random Forest"),
+  RMSE = c(
+    lm_mod$results$RMSE[1],
+    rpart_mod$results$RMSE[1],
+    sqrt(mean((rf_mod$predicted - airbnb_small$log_price)^2))
+  ),
+  Rsquared = c(
+    lm_mod$results$Rsquared[1],
+    rpart_mod$results$Rsquared[1],
+    cor(rf_mod$predicted, airbnb_small$log_price)^2
+  )
+)
+kable(model_summary, caption = "Model Performance Summary")
+```
+
+### 7. Residual Diagnostics
+
+```{r residuals}
+resid <- airbnb_small$log_price - rf_mod$predicted
+error_magnitude <- abs(resid)
+
+ggplot(tibble(preds = rf_mod$predicted, resid, error_magnitude), aes(x = preds, y = resid, color = error_magnitude)) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "darkred") +
+  scale_color_viridis(option = "C", direction = -1, name = "Error Magnitude") +
+  labs(
+    x = "Predicted Log(Price)",
+    y = "Residual",
+    title = "Residuals vs. Predicted Values"
+  ) +
+  theme_minimal()
+```
+
+### 8. Conclusion
+
+- **Main findings:** Borough, room type, and reviews significantly affect pricing.
+- **Best model:** Random Forest performed best using a small sample.
+- **Next steps:** Explore full dataset, NLP for reviews, spatial trends.
+
+---
