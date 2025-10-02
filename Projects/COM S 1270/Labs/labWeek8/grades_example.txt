@@ -1,0 +1,5 @@
+Student ID,Name,Total Scores,Sum of All Scores,Score Average
+123456,John Smith,5,408,81.6
+654321,John Smith,3,147,49.0
+246810,Trevor Smith,3,222,74.0
+135791,Sally Smith,4,176,44.0
